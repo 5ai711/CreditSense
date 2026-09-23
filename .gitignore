@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+research/results/curves.npz
+research/results/run.log
