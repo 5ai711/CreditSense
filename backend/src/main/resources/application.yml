@@ -1,0 +1,99 @@
+spring:
+  application:
+    name: creditsense-backend
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/creditsense}
+    username: ${DB_USER:creditsense}
+    password: ${DB_PASSWORD:creditsense}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate  # schema is owned by Flyway migrations
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  flyway:
+    enabled: true
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: always
+
+server:
+  port: ${PORT:8080}
+  error:
+    include-message: always
+
+creditsense:
+  jwt:
+    secret: ${JWT_SECRET:dev-only-secret-change-me-please-32bytes!!}
+    issuer: creditsense
+    access-token-ttl: ${JWT_ACCESS_TTL:15m}
+    refresh-token-ttl: ${JWT_REFRESH_TTL:7d}
+  ml:
+    base-url: ${ML_BASE_URL:http://localhost:8000}
+    service-token: ${ML_SERVICE_TOKEN:}
+    admin-timeout: 3m
+    approve-below: 0.20
+  compliance:
+    kyc-threshold: 0.8
+    velocity-max-applications: 3
+    velocity-window-days: 30
+    min-bank-statement-months: 6
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+  seed:
+    enabled: ${SEED_DEMO_DATA:false}
+    password: ${SEED_DEMO_PASSWORD:Demo@1234}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      mlService:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+        ignore-exceptions:
+          - org.springframework.web.reactive.function.client.WebClientResponseException$BadRequest
+          - org.springframework.web.reactive.function.client.WebClientResponseException$UnprocessableEntity
+          - org.springframework.web.reactive.function.client.WebClientResponseException$Unauthorized
+  retry:
+    instances:
+      mlService:
+        max-attempts: 3
+        wait-duration: 300ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - org.springframework.web.reactive.function.client.WebClientRequestException
+          - org.springframework.web.reactive.function.client.WebClientResponseException$InternalServerError
+          - org.springframework.web.reactive.function.client.WebClientResponseException$BadGateway
+          - org.springframework.web.reactive.function.client.WebClientResponseException$ServiceUnavailable
+          - org.springframework.web.reactive.function.client.WebClientResponseException$GatewayTimeout
+          - java.util.concurrent.TimeoutException
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+  timelimiter:
+    instances:
+      mlService:
+        timeout-duration: 3s
+        cancel-running-future: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+  health:
+    circuitbreakers:
+      enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html

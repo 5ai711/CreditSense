@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+/* CreditSense design tokens: an instrument for a risk desk, not a landing page. */
+@theme {
+  --color-ink: #12161c;
+  --color-panel: #1a2028;
+  --color-panel-raised: #232b35;
+  --color-rule: #2e3742;
+  --color-paper: #e4e7eb;
+  --color-paper-deep: #d3d8de;
+  --color-paper-rule: #c3c9d1;
+  --color-amber: #d9a441;
+  --color-risk: #c4453d;
+  --color-risk-deep: #a3352e;
+  --color-confirm: #3f7d58;
+  --color-confirm-deep: #2f6545;
+  --color-muted: #5b6472;
+  --color-fog: #9aa3b0;
+  --color-steel: #3a6ea5;
+
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@layer base {
+  html {
+    background: var(--color-panel);
+    color: var(--color-paper);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+  /* every number gets the tabular terminal voice */
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-amber);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

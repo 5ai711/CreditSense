@@ -1,0 +1,246 @@
+package com.creditsense.it;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.creditsense.domain.Role;
+import com.creditsense.domain.User;
+import com.creditsense.repo.UserRepository;
+import com.creditsense.risk.TestPredictions;
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import okhttp3.mockwebserver.Dispatcher;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.*;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+/** End-to-end API flow against a real PostgreSQL (Testcontainers) and a stubbed ML service. */
+@Tag("integration")
+@Testcontainers(disabledWithoutDocker = true)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+class ApplicationFlowIntegrationTest {
+
+    @Container
+    @ServiceConnection
+    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+
+    static final MockWebServer ML = new MockWebServer();
+    static final AtomicInteger ML_STATUS = new AtomicInteger(200);
+
+    /** A valid Telangana GSTIN for the given PAN (each test uses its own PAN: duplicates are a fraud signal). */
+    static String gstin(String pan) {
+        String body = "36" + pan + "1Z";
+        return body + com.creditsense.compliance.Gstin.checkCharacter(body);
+    }
+
+    static {
+        ML.setDispatcher(new Dispatcher() {
+            @Override
+            public MockResponse dispatch(RecordedRequest request) {
+                if (ML_STATUS.get() != 200) return new MockResponse().setResponseCode(ML_STATUS.get());
+                return new MockResponse().setHeader("Content-Type", "application/json")
+                        .setBody(TestPredictions.json(0.27, "HIGH"));
+            }
+        });
+        try {
+            ML.start();
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @DynamicPropertySource
+    static void props(DynamicPropertyRegistry r) {
+        r.add("creditsense.ml.base-url", () -> ML.url("/").toString());
+        r.add("creditsense.jwt.secret", () -> "integration-test-secret-at-least-32-bytes!");
+    }
+
+    @AfterAll
+    static void stopMl() throws IOException {
+        ML.shutdown();
+    }
+
+    @Autowired TestRestTemplate http;
+    @Autowired UserRepository users;
+    @Autowired PasswordEncoder encoder;
+    @Autowired JdbcTemplate jdbc;
+
+    @BeforeEach
+    void staff() {
+        ML_STATUS.set(200);
+        for (var s : List.of(new String[]{"officer@it.test", "LOAN_OFFICER"}, new String[]{"admin@it.test", "ADMIN"})) {
+            if (users.findByEmailIgnoreCase(s[0]).isEmpty()) {
+                User u = new User();
+                u.setEmail(s[0]);
+                u.setFullName(s[1]);
+                u.setRole(Role.valueOf(s[1]));
+                u.setPasswordHash(encoder.encode("Passw0rd!"));
+                users.save(u);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ helpers
+    String register(String email) {
+        var body = Map.of("email", email, "password", "Passw0rd1", "fullName", "Test Owner");
+        var res = http.postForEntity("/api/auth/register", body, Map.class);
+        assertThat(res.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        return (String) res.getBody().get("accessToken");
+    }
+
+    String login(String email) {
+        var res = http.postForEntity("/api/auth/login", Map.of("email", email, "password", "Passw0rd!"), Map.class);
+        return (String) res.getBody().get("accessToken");
+    }
+
+    <T> ResponseEntity<T> call(HttpMethod method, String url, String token, Object body, Class<T> type) {
+        HttpHeaders h = new HttpHeaders();
+        h.setBearerAuth(token);
+        h.setContentType(MediaType.APPLICATION_JSON);
+        return http.exchange(url, method, new HttpEntity<>(body, h), type);
+    }
+
+    static Map<String, Object> application(String gstin, String pan) {
+        return Map.of(
+                "business", Map.ofEntries(Map.entry("businessName", "Rao Precision Components"),
+                        Map.entry("ownerName", "Neha Rao"), Map.entry("sector", "MANUFACTURING"), Map.entry("pan", pan),
+                        Map.entry("gstin", gstin), Map.entry("udyamNumber", "UDYAM-TS-02-0012345"),
+                        Map.entry("addressLine", "Plot 12, IDA Uppal"), Map.entry("city", "Hyderabad"),
+                        Map.entry("stateCode", "36"), Map.entry("pincode", "500039"),
+                        Map.entry("businessStartDate", "2017-04-01")),
+                "loan", Map.of("amount", 18.5, "purpose", "EQUIPMENT", "tenureMonths", 36),
+                "financials", Map.of("monthlyRevenues", List.of(9.2, 8.7, 10.1, 9.6, 9.9, 10.4), "existingDebt", 22,
+                        "avgMonthlyInflow", 9.8, "avgMonthlyOutflow", 9.1, "avgBankBalance", 6.5,
+                        "gstOnTimeFilingPct", 92, "tradeReferences", 4, "delinquencyEvents", 0,
+                        "digitalTxnPerMonth", 140),
+                "documents", List.of(Map.of("type", "PAN", "documentNumber", pan),
+                        Map.of("type", "UDYAM", "documentNumber", "UDYAM-TS-02-0012345"),
+                        Map.of("type", "ADDRESS_PROOF", "documentNumber", "EB-4471920"),
+                        Map.of("type", "BANK_STATEMENT", "documentNumber", "STMT-88121", "monthsCovered", 12)));
+    }
+
+    // ------------------------------------------------------------------ tests
+    @Test
+    void applicantToDecisionWithAuditTrail() {
+        String applicant = register("owner1@it.test");
+        var submitted = call(HttpMethod.POST, "/api/applications", applicant, application(gstin("AKTPR4821K"), "AKTPR4821K"), Map.class);
+        assertThat(submitted.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        Map<?, ?> app = submitted.getBody();
+        assertThat(app.get("status")).isEqualTo("RISK_SCORED");
+        assertThat((List<?>) ((Map<?, ?>) app.get("riskAssessment")).get("contributions")).hasSize(13);
+        assertThat(app.get("modelRecommendation")).isEqualTo("REJECT");
+        assertThat((List<?>) app.get("timeline")).isEmpty(); // audit trail is staff-only
+        Number id = (Number) app.get("id");
+
+        // another applicant cannot see it, not even that it exists
+        String stranger = register("owner2@it.test");
+        assertThat(call(HttpMethod.GET, "/api/applications/" + id, stranger, null, Map.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(call(HttpMethod.GET, "/api/applications", applicant, null, Map.class).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN);
+
+        String officer = login("officer@it.test");
+        var override = call(HttpMethod.POST, "/api/applications/" + id + "/decision", officer,
+                Map.of("decision", "APPROVE"), Map.class);
+        assertThat(override.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+        var decided = call(HttpMethod.POST, "/api/applications/" + id + "/decision", officer,
+                Map.of("decision", "APPROVE", "reason", "Collateral offered and long banking relationship"), Map.class);
+        assertThat(decided.getBody().get("status")).isEqualTo("APPROVED");
+        assertThat(((Map<?, ?>) decided.getBody().get("decision")).get("override")).isEqualTo(true);
+
+        String admin = login("admin@it.test");
+        var audit = call(HttpMethod.GET, "/api/audit-logs?entityType=LoanApplication&entityId=" + id + "&sort=createdAt,asc&sort=id,asc",
+                admin, null, Map.class);
+        List<Object> actions = ((List<?>) audit.getBody().get("content")).stream().map(e -> (Object) ((Map<?, ?>) e).get("action")).toList();
+        assertThat(actions).containsExactly("APPLICATION_SUBMITTED", "COMPLIANCE_EVALUATED", "RISK_ASSESSED",
+                "DECISION_RECORDED");
+        List<Object> actors = ((List<?>) audit.getBody().get("content")).stream()
+                .map(e -> (Object) ((Map<?, ?>) e).get("actorEmail")).toList();
+        assertThat(actors).containsExactly("owner1@it.test", "system@creditsense", "system@creditsense", "officer@it.test");
+    }
+
+    @Test
+    void complianceFailureIsTerminalAndExplained() {
+        String applicant = register("owner3@it.test");
+        String good = gstin("BLMPS1234Q");
+        String typo = good.substring(0, 14) + (good.charAt(14) == 'A' ? 'B' : 'A');
+        Map<?, ?> app = call(HttpMethod.POST, "/api/applications", applicant, application(typo, "BLMPS1234Q"), Map.class)
+                .getBody();
+        assertThat(app.get("status")).isEqualTo("COMPLIANCE_FAILED");
+        assertThat((List<?>) app.get("complianceChecks")).anySatisfy(c -> {
+            assertThat(((Map<?, ?>) c).get("checkType")).isEqualTo("GST_VALIDITY");
+            assertThat(((Map<?, ?>) c).get("passed")).isEqualTo(false);
+        });
+        assertThat(app.get("riskAssessment")).isNull();
+
+        String officer = login("officer@it.test");
+        var scoring = call(HttpMethod.POST, "/api/applications/" + app.get("id") + "/risk-assessment", officer, null, Map.class);
+        assertThat(scoring.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test
+    void modelOutageRoutesToManualReview() {
+        ML_STATUS.set(503);
+        String applicant = register("owner4@it.test");
+        Map<?, ?> app = call(HttpMethod.POST, "/api/applications", applicant, application(gstin("CQRFT5678Z"), "CQRFT5678Z"),
+                Map.class).getBody();
+        assertThat(app.get("status")).isEqualTo("MANUAL_REVIEW");
+        assertThat((String) app.get("manualReviewReason")).startsWith("Risk model unavailable");
+    }
+
+    @Test
+    void malformedInputIsRejectedWithFieldErrors() {
+        String applicant = register("owner5@it.test");
+        var res = call(HttpMethod.POST, "/api/applications", applicant, application("NOT-A-GSTIN", "DSTPU9012W"),
+                Map.class);
+        assertThat(res.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat((List<?>) res.getBody().get("fieldErrors"))
+                .anySatisfy(f -> assertThat(((Map<?, ?>) f).get("field")).isEqualTo("business.gstin"));
+    }
+
+    @Test
+    void auditTrailIsAppendOnly() {
+        register("owner6@it.test");
+        assertThatThrownBy(() -> jdbc.update("update audit_logs set action = 'TAMPERED'"))
+                .hasMessageContaining("append-only");
+        assertThatThrownBy(() -> jdbc.update("delete from audit_logs")).hasMessageContaining("append-only");
+    }
+
+    @Test
+    void loginRefreshAndReuseDetection() {
+        register("owner7@it.test");
+        var login = http.postForEntity("/api/auth/login", Map.of("email", "owner7@it.test", "password", "Passw0rd1"),
+                Map.class).getBody();
+        String first = (String) login.get("refreshToken");
+        var rotated = http.postForEntity("/api/auth/refresh", Map.of("refreshToken", first), Map.class);
+        assertThat(rotated.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String second = (String) rotated.getBody().get("refreshToken");
+        assertThat(http.postForEntity("/api/auth/refresh", Map.of("refreshToken", first), Map.class).getStatusCode())
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+        // reuse revoked every session of the user
+        assertThat(http.postForEntity("/api/auth/refresh", Map.of("refreshToken", second), Map.class).getStatusCode())
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(http.postForEntity("/api/auth/login", Map.of("email", "owner7@it.test", "password", "wrong"),
+                Map.class).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+}
