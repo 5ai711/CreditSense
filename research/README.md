@@ -17,6 +17,16 @@ python export_tex.py <dir>    # LaTeX macros and table rows built from results/m
 `--retune` forces a fresh hyperparameter search. All seeds are fixed, so reruns
 reproduce `results/metrics.json` apart from the latency timings.
 
+The platform measurements come from the running system rather than from the simulation:
+
+```bash
+docker compose up -d --build --wait          # from the repository root
+python platform_bench.py --n 200             # results/platform.json; stops and restarts ml-service
+```
+
+It submits applications through the web proxy as the browser does, then stops the ML
+service to measure the fallback to manual review and the circuit breaker's recovery.
+
 ## Layout
 
 | Path | Contents |
@@ -26,7 +36,9 @@ reproduce `results/metrics.json` apart from the latency timings.
 | `creditsense_sim/gstin.py` | GSTIN shape check, Luhn mod-36 check character, error generators |
 | `run_experiments.py` | every experiment; writes `results/metrics.json` |
 | `make_figures.py` | figures from the saved results |
-| `export_tex.py` | macros/tables so reported numbers always match `metrics.json` |
+| `platform_bench.py` | end-to-end latency and outage behaviour of the running stack; writes `results/platform.json` |
+| `export_tex.py` | macros/tables so reported numbers always match `metrics.json` and `platform.json` |
 
-The data are simulated, so the metrics describe the method under a documented
+The generator is identical to the ML service's (`ml-service/creditsense_ml/generator.py`). The data are
+simulated, so the metrics describe the method under a documented
 generator, not performance on a real loan book.

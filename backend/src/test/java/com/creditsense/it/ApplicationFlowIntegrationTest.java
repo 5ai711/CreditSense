@@ -243,4 +243,19 @@ class ApplicationFlowIntegrationTest {
         assertThat(http.postForEntity("/api/auth/login", Map.of("email", "owner7@it.test", "password", "wrong"),
                 Map.class).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
+
+    @Test
+    void repeatedFailedSignInsAreThrottledEvenWithTheRightPassword() {
+        register("owner8@it.test");
+        var wrong = Map.of("email", "owner8@it.test", "password", "not-my-password");
+        for (int i = 0; i < 5; i++) {
+            assertThat(http.postForEntity("/api/auth/login", wrong, Map.class).getStatusCode())
+                    .isEqualTo(HttpStatus.UNAUTHORIZED);
+        }
+        var blocked = http.postForEntity("/api/auth/login",
+                Map.of("email", "owner8@it.test", "password", "Passw0rd1"), Map.class);
+        assertThat(blocked.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(blocked.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isNotBlank();
+        assertThat((String) blocked.getBody().get("message")).contains("too many failed sign-in attempts");
+    }
 }

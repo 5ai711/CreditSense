@@ -1,5 +1,6 @@
 package com.creditsense.risk;
 
+import com.creditsense.common.ApiException;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -17,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 
 /**
@@ -112,6 +114,8 @@ public class MlClient {
     private <T> T admin(String what, Mono<T> call) {
         try {
             return call.timeout(props.adminTimeout()).block();
+        } catch (WebClientResponseException.Conflict e) {
+            throw ApiException.conflict("The ML service is already running a " + what + "; try again when it finishes");
         } catch (RuntimeException e) {
             log.warn("ML service {} failed: {}", what, e.toString());
             throw new MlUnavailableException("ML service could not " + what + " (" + describe(e) + ")", e);

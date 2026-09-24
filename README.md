@@ -83,14 +83,45 @@ SUBMITTED ─gate─► COMPLIANCE_FAILED            (terminal; the failing rule
   to manual review instead of storing the score.
 * **Calibrated scores that stay explainable.** Class weighting inflates raw XGBoost probabilities, so the margin is
   recalibrated with Platt scaling. Because that map is affine, the SHAP ledger stays exact on the calibrated scale.
-* **Graceful degradation.** The ML client runs behind Resilience4j `TimeLimiter`, `CircuitBreaker` and `Retry`. If the
-  model is unreachable, the application moves to `MANUAL_REVIEW` with the reason recorded.
+* **Graceful degradation.** The ML client runs behind Resilience4j `TimeLimiter` (3 s), `CircuitBreaker` and `Retry`.
+  Connection errors and 5xx responses are retried; timeouts are not, so no applicant waits longer than one attempt.
+  If the model is unreachable, the application moves to `MANUAL_REVIEW` with the reason recorded. Measured on the
+  compose stack: about 3 s for the first few submissions, then about 35 ms once the breaker is open, and scoring
+  resumes on its own after the model comes back (`research/platform_bench.py`).
 * **Auditability.** Every state change writes an audit row with actor, action and before/after state. A database
   trigger rejects `UPDATE` and `DELETE` on `audit_logs`. Automatic pipeline steps are attributed to `system`, and
   officer re-runs to the officer.
 * **Model lifecycle.** Matured loans get simulated 12-month outcomes from the same ground-truth process as the
   training data. `/retrain` trains a challenger on base data plus feedback and promotes it only if its AUC on a
-  holdout that no model trains on beats the champion's. Every comparison is logged and charted.
+  holdout that no model trains on beats the champion's. Every comparison is logged and charted. Training runs off
+  the scoring path, so predictions keep flowing during a retrain, and a second retrain request gets `409`.
+
+* **Sign-in protection.** Five failed sign-ins for one account, or twenty from one address, within 15 minutes
+  return `429` with `Retry-After` until the window passes (even with the right password). Unknown emails take as
+  long to reject as known ones.
+
+## Deploying to a server
+
+```bash
+cp .env.example .env        # then set DB_PASSWORD, JWT_SECRET, ML_SERVICE_TOKEN, PUBLIC_ORIGIN
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --wait
+```
+
+The production override:
+
+* runs the backend with the `prod` profile, which **refuses to start** with a missing secret, a secret published in
+  this repository, an empty ML service token or a wildcard CORS origin;
+* publishes only the web app (port `HTTP_PORT`, default 80). The API, database and ML service are reachable only on
+  the internal network, and Swagger UI is off (`API_DOCS_ENABLED=true` turns it back on);
+* does not seed demo data unless `SEED_DEMO_DATA=true`.
+
+Terminate TLS in front of the web container (a load balancer, Caddy, or nginx with certificates). The web container
+sends a strict Content-Security-Policy and the other security headers, gzips assets, caches hashed assets for a year
+and never caches `index.html`, and re-resolves the backend's address, so restarting the backend alone is safe. All
+services restart automatically and have health checks; the backend shuts down gracefully.
+
+Back up the `pgdata` volume (applications and the audit trail) and the `mldata` volume (model registry, training
+data and outcomes).
 
 ## Running and testing each part
 
@@ -110,10 +141,13 @@ cd frontend && npm ci && npm test && npm run dev            # proxies /api to lo
 
 | Suite | What it covers |
 |---|---|
-| `ml-service/tests` | generator properties, additivity of every explanation, withheld scores, persisted metrics, feedback de-duplication, champion/challenger promotion, API validation and service token |
-| `backend` unit tests | GSTIN (every single-character substitution caught), each compliance rule and its edge cases, the gate service, explanation contract, feature derivation, risk orchestration and fallback, ML client retry, timeout and circuit breaker, decision rules, JWT |
-| `backend` integration test | real PostgreSQL: applicant to decision with the audit sequence, ownership (404 for another applicant's application), compliance failure blocking scoring, ML outage leading to manual review, field-level validation errors, append-only audit trigger, refresh-token rotation and reuse detection |
+| `ml-service/tests` | generator properties, additivity of every explanation, withheld scores, persisted metrics, feedback de-duplication, champion/challenger promotion, scoring during a retrain, API validation and service token |
+| `backend` unit tests | GSTIN (every single-character substitution caught), each compliance rule and its edge cases, the gate service, explanation contract, feature derivation, risk orchestration and fallback, ML client retry, timeout and circuit breaker, decision rules, JWT, sign-in throttling, production secret checks |
+| `backend` integration test | real PostgreSQL: applicant to decision with the audit sequence, ownership (404 for another applicant's application), compliance failure blocking scoring, ML outage leading to manual review, field-level validation errors, append-only audit trigger, refresh-token rotation and reuse detection, sign-in throttling |
 | `frontend` | GSTIN rules identical to the backend's, and the ledger balancing and labelling |
+
+GitHub Actions (`.github/workflows/ci.yml`) runs all three suites on every push, then builds the images, starts the
+whole stack and signs in through the web proxy.
 
 ## API
 
@@ -132,8 +166,8 @@ cd frontend && npm ci && npm test && npm run dev            # proxies /api to lo
 
 ## Configuration
 
-Copy `.env.example` to `.env`. **Change `JWT_SECRET` and `ML_SERVICE_TOKEN` before running anywhere but your own
-machine.** Set `SEED_DEMO_DATA=false` for an empty system.
+Copy `.env.example` to `.env`. The defaults are for your own machine; the production override above rejects them.
+Set `SEED_DEMO_DATA=false` for an empty system.
 
 ## Honest limitations
 
@@ -143,3 +177,5 @@ machine.** Set `SEED_DEMO_DATA=false` for an empty system.
   NSDL or Udyam registries. The blacklist holds demo entries.
 * The web client keeps tokens in `localStorage` for simplicity. A production deployment should move the refresh
   token to an `HttpOnly` cookie.
+* Sign-in throttling counts in memory, per backend instance. Several instances behind a load balancer would each keep
+  their own counts; a shared store (for example Redis) would be needed then.

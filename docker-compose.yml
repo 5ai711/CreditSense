@@ -1,10 +1,12 @@
 # One command brings up the whole system:  docker compose up --build
 # Frontend: http://localhost:3000   API + Swagger: http://localhost:8080/swagger-ui.html
+# For a server deployment add the production overrides: see docker-compose.prod.yml.
 name: creditsense
 
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: creditsense
       POSTGRES_USER: creditsense
@@ -19,6 +21,7 @@ services:
 
   ml-service:
     build: ./ml-service
+    restart: unless-stopped
     environment:
       ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-local-dev-ml-token}
       ML_RETRAIN_TRIALS: ${ML_RETRAIN_TRIALS:-0}
@@ -28,6 +31,7 @@ services:
 
   backend:
     build: ./backend
+    restart: unless-stopped
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/creditsense
       DB_USER: creditsense
@@ -53,6 +57,7 @@ services:
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     depends_on:
       backend:
         condition: service_healthy

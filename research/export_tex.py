@@ -210,4 +210,25 @@ for r in lc:
         f"{r['auc_champion']:.3f} & {r['auc_challenger']:.3f} & {dec} & {sig} \\\\".replace(",", "{,}")
     )
 (out / "table_lifecycle.tex").write_text("\n".join(lrows) + "\n")
+
+# ---- platform measurements (platform_bench.py against the running stack)
+plat_path = Path(__file__).parent / "results" / "platform.json"
+if plat_path.exists():
+    plat = json.loads(plat_path.read_text())
+    slow = [o["ms"] for o in plat["outage"] if o["ms"] >= 1000]
+    fast = [o["ms"] for o in plat["outage"] if o["ms"] < 1000]
+    assert all(o["status"] == "MANUAL_REVIEW" for o in plat["outage"])
+    with open(out / "results_macros.tex", "a") as fh:
+        for name, value in {
+            "platN": plat["n"],
+            "platMed": f"{plat['latency_ms']['median']:.0f}",
+            "platP": f"{plat['latency_ms']['p95']:.0f}",
+            "platMax": f"{plat['latency_ms']['max']:.0f}",
+            "outN": len(plat["outage"]),
+            "outSlowN": len(slow),
+            "outSlowMax": f"{max(slow) / 1000:.1f}",
+            "outFastMed": f"{float(np.median(fast)):.0f}",
+            "recovSec": f"{plat['recovery']['seconds_after_healthy']:.0f}",
+        }.items():
+            fh.write(f"\\newcommand{{\\{name}}}{{{value}}}\n")
 print(f"wrote {len(macros)} macros")

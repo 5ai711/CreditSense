@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .features import SECTORS
-from .service import ExplanationUnavailable, ModelService
+from .service import ExplanationUnavailable, ModelService, RetrainInProgress
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("creditsense.ml")
@@ -146,7 +146,10 @@ def simulate(req: OutcomeRequest):
 
 @app.post("/retrain", dependencies=[Depends(require_token)])
 def retrain():
-    return _service().retrain()
+    try:
+        return _service().retrain()
+    except RetrainInProgress as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/model-info", dependencies=[Depends(require_token)])

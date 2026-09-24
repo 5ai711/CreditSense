@@ -1,0 +1,17 @@
+# Activated with SPRING_PROFILES_ACTIVE=prod (see docker-compose.prod.yml).
+# ProductionSafetyCheck refuses to start this profile with the development secrets.
+
+creditsense:
+  seed:
+    enabled: ${SEED_DEMO_DATA:false}
+
+springdoc:
+  api-docs:
+    enabled: ${API_DOCS_ENABLED:false}
+  swagger-ui:
+    enabled: ${API_DOCS_ENABLED:false}
+
+server:
+  error:
+    include-message: always
+    include-stacktrace: never

@@ -5,6 +5,7 @@ import com.creditsense.auth.AuthService;
 import com.creditsense.security.AuthUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -30,8 +31,8 @@ public class AuthController {
 
     @PostMapping("/login")
     @Operation(summary = "Exchange credentials for an access token and a refresh token")
-    public TokenResponse login(@Valid @RequestBody LoginRequest req) {
-        return auth.login(req);
+    public TokenResponse login(@Valid @RequestBody LoginRequest req, HttpServletRequest http) {
+        return auth.login(req, http.getRemoteAddr());
     }
 
     @PostMapping("/refresh")

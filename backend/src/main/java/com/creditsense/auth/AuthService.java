@@ -4,11 +4,14 @@ import com.creditsense.audit.AuditService;
 import com.creditsense.auth.AuthDtos.*;
 import com.creditsense.common.Actor;
 import com.creditsense.common.ApiException;
+import com.creditsense.common.RateLimitedException;
 import com.creditsense.domain.Role;
 import com.creditsense.domain.User;
 import com.creditsense.repo.UserRepository;
 import com.creditsense.security.JwtService;
+import com.creditsense.security.LoginThrottle;
 import com.creditsense.security.RefreshTokenService;
+import java.time.Duration;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -24,16 +27,18 @@ public class AuthService {
     private final JwtService jwt;
     private final RefreshTokenService refreshTokens;
     private final AuditService audit;
+    private final LoginThrottle throttle;
     // Compared against when the email is unknown, so response time does not reveal which emails exist.
     private final String dummyHash;
 
     public AuthService(UserRepository users, PasswordEncoder encoder, JwtService jwt,
-            RefreshTokenService refreshTokens, AuditService audit) {
+            RefreshTokenService refreshTokens, AuditService audit, LoginThrottle throttle) {
         this.users = users;
         this.encoder = encoder;
         this.jwt = jwt;
         this.refreshTokens = refreshTokens;
         this.audit = audit;
+        this.throttle = throttle;
         this.dummyHash = encoder.encode(java.util.UUID.randomUUID().toString());
     }
 
@@ -56,15 +61,23 @@ public class AuthService {
     }
 
     @Transactional(noRollbackFor = ApiException.class)
-    public TokenResponse login(LoginRequest req) {
+    public TokenResponse login(LoginRequest req, String client) {
         String email = req.email().strip().toLowerCase();
+        Duration wait = throttle.retryAfter(email, client);
+        if (!wait.isZero()) {
+            long minutes = Math.max(1, (wait.toSeconds() + 59) / 60);
+            throw new RateLimitedException("too many failed sign-in attempts; try again in " + minutes
+                    + (minutes == 1 ? " minute" : " minutes"), wait);
+        }
         User u = users.findByEmailIgnoreCase(email).orElse(null);
         boolean ok = encoder.matches(req.password(), u == null ? dummyHash : u.getPasswordHash());
         if (u == null || !ok || !u.isEnabled()) {
+            throttle.failed(email, client);
             audit.record(new Actor(u == null ? null : u.getId(), email, u == null ? "UNKNOWN" : u.getRole().name()),
                     "LOGIN_FAILED", "User", u == null ? null : u.getId(), null, null);
             throw new ApiException(HttpStatus.UNAUTHORIZED, "invalid email or password");
         }
+        throttle.succeeded(email);
         audit.record(Actor.of(u), "LOGIN_SUCCEEDED", "User", u.getId(), null, null);
         return tokens(u);
     }

@@ -1,6 +1,8 @@
 package com.creditsense.web;
 
 import com.creditsense.common.ApiException;
+import com.creditsense.common.RateLimitedException;
+import com.creditsense.risk.MlUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import java.time.Instant;
@@ -9,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -33,7 +36,13 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(ApiException.class)
     ResponseEntity<Map<String, Object>> api(ApiException e, HttpServletRequest req) {
-        return body(e.status(), e.getMessage(), req, null);
+        ResponseEntity<Map<String, Object>> res = body(e.status(), e.getMessage(), req, null);
+        if (e instanceof RateLimitedException limited) {
+            return ResponseEntity.status(res.getStatusCode())
+                    .header(HttpHeaders.RETRY_AFTER, Long.toString(limited.retryAfterSeconds()))
+                    .body(res.getBody());
+        }
+        return res;
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -68,6 +77,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler({AccessDeniedException.class, AuthorizationDeniedException.class})
     ResponseEntity<Map<String, Object>> denied(Exception e, HttpServletRequest req) {
         return body(HttpStatus.FORBIDDEN, "you do not have access to this resource", req, null);
+    }
+
+    @ExceptionHandler(MlUnavailableException.class)
+    ResponseEntity<Map<String, Object>> mlDown(MlUnavailableException e, HttpServletRequest req) {
+        return body(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage(), req, null);
     }
 
     @ExceptionHandler(ObjectOptimisticLockingFailureException.class)

@@ -1,0 +1,27 @@
+# Production overrides. Run with both files:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Every secret must be set in .env (see .env.example); startup fails if one is missing or is a
+# published development default. Only the web app is published; put a TLS-terminating proxy
+# (or a load balancer) in front of it.
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+
+  ml-service:
+    environment:
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:?set ML_SERVICE_TOKEN in .env}
+
+  backend:
+    ports: !reset []
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:?set ML_SERVICE_TOKEN in .env}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
+      CORS_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN in .env, e.g. https://credit.example.in}
+
+  frontend:
+    ports: !override
+      - "${HTTP_PORT:-80}:80"

@@ -1,0 +1,55 @@
+{
+  "n": 200,
+  "latency_ms": {
+    "median": 57.3,
+    "p95": 81.5,
+    "mean": 60.8,
+    "max": 101.9
+  },
+  "statuses": {
+    "RISK_SCORED": 200
+  },
+  "outage": [
+    {
+      "ms": 3070.2,
+      "status": "MANUAL_REVIEW"
+    },
+    {
+      "ms": 3048.0,
+      "status": "MANUAL_REVIEW"
+    },
+    {
+      "ms": 3046.1,
+      "status": "MANUAL_REVIEW"
+    },
+    {
+      "ms": 3059.2,
+      "status": "MANUAL_REVIEW"
+    },
+    {
+      "ms": 3072.3,
+      "status": "MANUAL_REVIEW"
+    },
+    {
+      "ms": 37.7,
+      "status": "MANUAL_REVIEW"
+    },
+    {
+      "ms": 34.2,
+      "status": "MANUAL_REVIEW"
+    },
+    {
+      "ms": 33.9,
+      "status": "MANUAL_REVIEW"
+    }
+  ],
+  "recovery": {
+    "seconds_after_healthy": 24.7,
+    "status": "RISK_SCORED"
+  },
+  "environment": {
+    "cpu": "x86_64",
+    "cores": 4,
+    "python": "3.11.15"
+  }
+}

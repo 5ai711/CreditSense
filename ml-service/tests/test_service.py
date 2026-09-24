@@ -61,3 +61,35 @@ def test_invalid_explanation_withholds_score(service, monkeypatch):
     monkeypatch.setattr(service._explainer, "shap_values", broken)
     with pytest.raises(ExplanationUnavailable):
         service.score(SAMPLE)
+
+
+def test_scoring_is_not_blocked_by_a_running_retrain(service, monkeypatch):
+    import threading
+
+    from creditsense_ml import service as service_module
+    from creditsense_ml.service import RetrainInProgress
+
+    started, release = threading.Event(), threading.Event()
+    real_train = service_module.train
+
+    def slow_train(*args, **kwargs):
+        started.set()
+        assert release.wait(30), "test did not release the retrain"
+        return real_train(*args, **kwargs)
+
+    monkeypatch.setattr(service_module, "train", slow_train)
+    worker = threading.Thread(target=service.retrain)
+    worker.start()
+    try:
+        assert started.wait(30)
+        scored = []
+        scorer = threading.Thread(target=lambda: scored.append(service.score(SAMPLE)))
+        scorer.start()
+        scorer.join(5)
+        assert scored, "a prediction waited for the retrain to finish"
+        with pytest.raises(RetrainInProgress):
+            service.retrain()
+    finally:
+        release.set()
+        worker.join(60)
+    assert not worker.is_alive()

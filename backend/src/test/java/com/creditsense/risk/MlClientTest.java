@@ -3,6 +3,7 @@ package com.creditsense.risk;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.creditsense.common.ApiException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -14,12 +15,12 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -37,8 +38,7 @@ class MlClientTest {
                 .slidingWindowSize(4).minimumNumberOfCalls(4).failureRateThreshold(50)
                 .waitDurationInOpenState(Duration.ofMinutes(1)).build());
         RetryRegistry retries = RetryRegistry.of(RetryConfig.custom().maxAttempts(3).waitDuration(Duration.ofMillis(10))
-                .retryExceptions(WebClientRequestException.class, WebClientResponseException.ServiceUnavailable.class,
-                        TimeoutException.class)
+                .retryExceptions(WebClientRequestException.class, WebClientResponseException.ServiceUnavailable.class)
                 .ignoreExceptions(io.github.resilience4j.circuitbreaker.CallNotPermittedException.class)
                 .build());
         TimeLimiterRegistry limiters = TimeLimiterRegistry.of(TimeLimiterConfig.custom()
@@ -84,8 +84,12 @@ class MlClientTest {
     @Test
     void timesOutSlowResponses() {
         for (int i = 0; i < 3; i++) server.enqueue(ok().setBodyDelay(2, TimeUnit.SECONDS));
+        long started = System.nanoTime();
         assertThatThrownBy(() -> client.predict(Map.of()))
                 .isInstanceOf(MlUnavailableException.class).hasMessageContaining("timed out");
+        // one attempt only: a timeout is not retried, so the caller waits one time budget, not three
+        assertThat(server.getRequestCount()).isEqualTo(1);
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(1500));
     }
 
     @Test
@@ -98,5 +102,13 @@ class MlClientTest {
         int before = server.getRequestCount();
         assertThatThrownBy(() -> client.predict(Map.of())).hasMessageContaining("circuit breaker open");
         assertThat(server.getRequestCount()).isEqualTo(before); // no call reached the service
+    }
+
+    @Test
+    void reportsARetrainAlreadyInProgressAsAConflictWithoutRetrying() {
+        server.enqueue(new MockResponse().setResponseCode(409));
+        assertThatThrownBy(client::retrain)
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.status()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(server.getRequestCount()).isEqualTo(1);
     }
 }

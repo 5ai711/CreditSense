@@ -27,6 +27,10 @@ class ExplanationUnavailable(RuntimeError):
     """Raised when a prediction cannot be accompanied by a valid explanation."""
 
 
+class RetrainInProgress(RuntimeError):
+    """Raised when a retrain is requested while another one is still running."""
+
+
 @dataclass
 class Contribution:
     feature: str
@@ -56,7 +60,10 @@ class ModelService:
         self.bootstrap_trials, self.retrain_trials = bootstrap_trials, retrain_trials
         self.n_train, self.n_holdout, self.seed = n_train, n_holdout, seed
         self.registry = Registry(self.data_dir)
+        # _lock guards the serving triple and the feedback file and is only ever held briefly, so
+        # scoring never waits for training. _retrain_lock serialises retrains (and registry writes).
         self._lock = threading.RLock()
+        self._retrain_lock = threading.Lock()
         self._model: TrainingResult | None = None
         self._explainer: shap.TreeExplainer | None = None
         self._version: str | None = None
@@ -93,9 +100,11 @@ class ModelService:
 
     def _activate(self, version: str) -> None:
         model = self.registry.load(version)
-        # Building the explainer is the expensive part, so it happens once per version.
+        # Building the explainer is the expensive part, so it happens once per version, before the
+        # swap: requests keep using the previous model until the new one is fully ready.
         explainer = shap.TreeExplainer(model.primary.model)
-        self._model, self._explainer, self._version = model, explainer, version
+        with self._lock:
+            self._model, self._explainer, self._version = model, explainer, version
         log.info("serving model %s", version)
 
     @property
@@ -140,8 +149,9 @@ class ModelService:
 
     # ------------------------------------------------------------------ feedback loop
     def _feedback(self) -> pd.DataFrame:
-        if self.feedback_path.exists():
-            return pd.read_csv(self.feedback_path)
+        with self._lock:
+            if self.feedback_path.exists():
+                return pd.read_csv(self.feedback_path)
         return pd.DataFrame(columns=["reference_id", "recorded_at", *FEATURE_NAMES, LABEL])
 
     @staticmethod
@@ -149,9 +159,9 @@ class ModelService:
         # One in five matured loans is reserved for evaluation and never used for training.
         return int(hashlib.sha256(reference.encode()).hexdigest(), 16) % 5 == 0
 
-    def _holdout(self) -> pd.DataFrame:
+    def _holdout(self, fb: pd.DataFrame | None = None) -> pd.DataFrame:
         base = pd.read_csv(self.holdout_path)
-        fb = self._feedback()
+        fb = self._feedback() if fb is None else fb
         if len(fb):
             fb = fb[fb["reference_id"].astype(str).map(self._is_holdout)]
             base = pd.concat([base, fb[FEATURE_NAMES + [LABEL]]], ignore_index=True)
@@ -172,7 +182,9 @@ class ModelService:
             new[LABEL] = outcomes
             known = set(fb["reference_id"].astype(str)) if len(fb) else set()
             new = new[~new["reference_id"].isin(known)]
-            pd.concat([fb, new], ignore_index=True).to_csv(self.feedback_path, index=False)
+            tmp = self.feedback_path.with_suffix(".csv.tmp")
+            pd.concat([fb, new], ignore_index=True).to_csv(tmp, index=False)
+            tmp.replace(self.feedback_path)  # readers never see a half-written file
         return list(zip(refs, outcomes.tolist()))
 
     def _holdout_auc(self, result: TrainingResult, holdout: pd.DataFrame) -> float:
@@ -180,44 +192,50 @@ class ModelService:
 
     def retrain(self) -> dict:
         """Train a challenger on base data plus accumulated outcomes; promote only if it wins."""
-        with self._lock:
-            started = time.perf_counter()
+        if not self._retrain_lock.acquire(blocking=False):
+            raise RetrainInProgress("a retrain is already running")
+        try:
+            return self._retrain()
+        finally:
+            self._retrain_lock.release()
+
+    def _retrain(self) -> dict:
+        started = time.perf_counter()
+        with self._lock:  # a consistent snapshot; training itself runs without the lock
             fb = self._feedback()
-            fb_train = fb[~fb["reference_id"].astype(str).map(self._is_holdout)] if len(fb) else fb
-            data = pd.concat([pd.read_csv(self.training_path), fb_train[FEATURE_NAMES + [LABEL]]], ignore_index=True)
-            data[NUMERIC_NAMES] = data[NUMERIC_NAMES].astype(float)
-            data[LABEL] = data[LABEL].astype(int)
+            champion_version, champion = self._version, self._model
+        fb_train = fb[~fb["reference_id"].astype(str).map(self._is_holdout)] if len(fb) else fb
+        data = pd.concat([pd.read_csv(self.training_path), fb_train[FEATURE_NAMES + [LABEL]]], ignore_index=True)
+        data[NUMERIC_NAMES] = data[NUMERIC_NAMES].astype(float)
+        data[LABEL] = data[LABEL].astype(int)
+        challenger = train(data, seed=self.seed + len(self.registry.records()), n_trials=self.retrain_trials,
+                           params=champion.params)
+        holdout = self._holdout(fb)
+        champ_auc = self._holdout_auc(champion, holdout)
+        chall_auc = self._holdout_auc(challenger, holdout)
+        promoted = chall_auc > champ_auc
 
-            champion_version = self._version
-            champion = self._model
-            challenger = train(data, seed=self.seed + len(self.registry.records()), n_trials=self.retrain_trials,
-                               params=champion.params)
-            holdout = self._holdout()
-            champ_auc = self._holdout_auc(champion, holdout)
-            chall_auc = self._holdout_auc(challenger, holdout)
-            promoted = chall_auc > champ_auc
-
-            version = self.registry.next_version()
-            self.registry.add(challenger, ModelRecord(
-                version=version, created_at=utcnow(), status="challenger", params=challenger.params,
-                metrics=challenger.metrics, baseline_metrics=challenger.baseline_metrics, cv_auc=challenger.cv_auc,
-                training_rows=challenger.training_rows, feedback_rows=int(len(fb_train)), holdout_auc=chall_auc,
-                parent_version=champion_version, notes=challenger.notes,
-            ))
-            if promoted:
-                self.registry.promote(version)
-                self._activate(version)
-            else:
-                self.registry.set_status(version, "rejected")
-            entry = {
-                "event": "retrain", "champion_version": champion_version, "challenger_version": version,
-                "champion_holdout_auc": champ_auc, "challenger_holdout_auc": chall_auc, "promoted": promoted,
-                "holdout_rows": int(len(holdout)), "feedback_rows": int(len(fb_train)),
-                "seconds": round(time.perf_counter() - started, 2),
-            }
-            self.registry.log_comparison(entry)
-            return {**entry, "serving_version": self._version,
-                    "challenger_metrics": challenger.metrics, "champion_metrics": champion.metrics}
+        version = self.registry.next_version()
+        self.registry.add(challenger, ModelRecord(
+            version=version, created_at=utcnow(), status="challenger", params=challenger.params,
+            metrics=challenger.metrics, baseline_metrics=challenger.baseline_metrics, cv_auc=challenger.cv_auc,
+            training_rows=challenger.training_rows, feedback_rows=int(len(fb_train)), holdout_auc=chall_auc,
+            parent_version=champion_version, notes=challenger.notes,
+        ))
+        if promoted:
+            self.registry.promote(version)
+            self._activate(version)
+        else:
+            self.registry.set_status(version, "rejected")
+        entry = {
+            "event": "retrain", "champion_version": champion_version, "challenger_version": version,
+            "champion_holdout_auc": champ_auc, "challenger_holdout_auc": chall_auc, "promoted": promoted,
+            "holdout_rows": int(len(holdout)), "feedback_rows": int(len(fb_train)),
+            "seconds": round(time.perf_counter() - started, 2),
+        }
+        self.registry.log_comparison(entry)
+        return {**entry, "serving_version": self._version,
+                "challenger_metrics": challenger.metrics, "champion_metrics": champion.metrics}
 
     # ------------------------------------------------------------------ introspection
     def info(self) -> dict:
