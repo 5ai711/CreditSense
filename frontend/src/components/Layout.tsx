@@ -37,11 +37,11 @@ export function Brand({ compact }: { compact?: boolean }) {
 }
 
 export function AppShell() {
-  const { user, refreshToken, clear } = useAuth()
+  const { user, clear } = useAuth()
   const navigate = useNavigate()
   if (!user) return null
   const logout = async () => {
-    if (refreshToken) await api.post('/auth/logout', { refreshToken }).catch(() => undefined)
+    await api.post('/auth/logout').catch(() => undefined) // revokes the token and clears the cookie
     clear()
     navigate('/login')
   }

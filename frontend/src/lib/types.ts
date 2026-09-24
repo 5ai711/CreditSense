@@ -21,9 +21,9 @@ export interface User {
   role: Role
 }
 
+/** The refresh token is not here: the server keeps it in an HttpOnly cookie that scripts cannot read. */
 export interface TokenResponse {
   accessToken: string
-  refreshToken: string
   tokenType: string
   expiresIn: number
   user: User

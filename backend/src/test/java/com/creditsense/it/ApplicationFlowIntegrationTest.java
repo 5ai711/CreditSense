@@ -226,19 +226,56 @@ class ApplicationFlowIntegrationTest {
         assertThatThrownBy(() -> jdbc.update("delete from audit_logs")).hasMessageContaining("append-only");
     }
 
+    static String refreshCookie(ResponseEntity<?> res) {
+        return res.getHeaders().getOrEmpty(HttpHeaders.SET_COOKIE).stream()
+                .filter(c -> c.startsWith("cs_refresh=")).reduce((a, b) -> b).orElseThrow();
+    }
+
+    static String cookieValue(String setCookie) {
+        return setCookie.substring("cs_refresh=".length(), setCookie.indexOf(';'));
+    }
+
+    ResponseEntity<Map> postWithCookie(String url, String refreshToken) {
+        HttpHeaders h = new HttpHeaders();
+        h.add(HttpHeaders.COOKIE, "cs_refresh=" + refreshToken);
+        return http.exchange(url, HttpMethod.POST, new HttpEntity<>(null, h), Map.class);
+    }
+
     @Test
-    void loginRefreshAndReuseDetection() {
+    void refreshTokenLivesInAnHttpOnlyCookieAndRotatesWithReuseDetection() {
         register("owner7@it.test");
         var login = http.postForEntity("/api/auth/login", Map.of("email", "owner7@it.test", "password", "Passw0rd1"),
-                Map.class).getBody();
-        String first = (String) login.get("refreshToken");
-        var rotated = http.postForEntity("/api/auth/refresh", Map.of("refreshToken", first), Map.class);
+                Map.class);
+        assertThat(login.getBody()).containsKey("accessToken").doesNotContainKey("refreshToken");
+        String set = refreshCookie(login);
+        assertThat(set).contains("HttpOnly", "SameSite=Strict", "Path=/api/auth", "Max-Age=");
+        String first = cookieValue(set);
+
+        var rotated = postWithCookie("/api/auth/refresh", first);
         assertThat(rotated.getStatusCode()).isEqualTo(HttpStatus.OK);
-        String second = (String) rotated.getBody().get("refreshToken");
-        assertThat(http.postForEntity("/api/auth/refresh", Map.of("refreshToken", first), Map.class).getStatusCode())
-                .isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(rotated.getBody()).containsKey("accessToken").doesNotContainKey("refreshToken");
+        String second = cookieValue(refreshCookie(rotated));
+        assertThat(second).isNotEqualTo(first);
+
+        var reused = postWithCookie("/api/auth/refresh", first);
+        assertThat(reused.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(refreshCookie(reused)).contains("Max-Age=0"); // the browser drops the dead cookie
         // reuse revoked every session of the user
-        assertThat(http.postForEntity("/api/auth/refresh", Map.of("refreshToken", second), Map.class).getStatusCode())
+        assertThat(postWithCookie("/api/auth/refresh", second).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+
+        // API clients without a cookie jar can send the token in the body
+        var again = http.postForEntity("/api/auth/login", Map.of("email", "owner7@it.test", "password", "Passw0rd1"),
+                Map.class);
+        String third = cookieValue(refreshCookie(again));
+        var viaBody = http.postForEntity("/api/auth/refresh", Map.of("refreshToken", third), Map.class);
+        assertThat(viaBody.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String fourth = cookieValue(refreshCookie(viaBody));
+
+        var logout = postWithCookie("/api/auth/logout", fourth);
+        assertThat(logout.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(refreshCookie(logout)).contains("Max-Age=0");
+        assertThat(postWithCookie("/api/auth/refresh", fourth).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(http.postForEntity("/api/auth/refresh", null, Map.class).getStatusCode())
                 .isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(http.postForEntity("/api/auth/login", Map.of("email", "owner7@it.test", "password", "wrong"),
                 Map.class).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);

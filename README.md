@@ -53,8 +53,8 @@ applicant. The circuit breaker opens and the application goes to `MANUAL_REVIEW`
                                    append-only audit log)                                 versioned model registry
 ```
 
-* **backend/**: the system of record and the only service the browser talks to. It owns authentication (JWT access
-  tokens plus rotating refresh tokens, BCrypt), role checks with `@PreAuthorize` and ownership checks, the compliance
+* **backend/**: the system of record and the only service the browser talks to. It owns authentication (15-minute JWT
+  access tokens, rotating refresh tokens in an `HttpOnly` cookie, BCrypt), role checks with `@PreAuthorize` and ownership checks, the compliance
   gate, calls to the ML service, decisions, portfolio analytics and the audit trail.
 * **ml-service/**: stateless from the caller's view. It receives an engineered feature vector (never names, PAN, GSTIN
   or documents) and returns a probability of default, a risk band, the model version and the full ledger. It also
@@ -96,6 +96,11 @@ SUBMITTED ─gate─► COMPLIANCE_FAILED            (terminal; the failing rule
   holdout that no model trains on beats the champion's. Every comparison is logged and charted. Training runs off
   the scoring path, so predictions keep flowing during a retrain, and a second retrain request gets `409`.
 
+* **Sessions.** The access token lives only in the page's memory. The refresh token is an `HttpOnly`,
+  `SameSite=Strict` cookie scoped to `/api/auth`, so page scripts cannot read it and other sites cannot send it. It
+  rotates on every use, and presenting a used token revokes all of that user's sessions. After a reload the web app
+  restores the session from the cookie. Tabs take turns refreshing (Web Locks API), so several tabs never look like a
+  replayed token. API clients without cookies can still send `refreshToken` in the request body.
 * **Sign-in protection.** Five failed sign-ins for one account, or twenty from one address, within 15 minutes
   return `429` with `Retry-After` until the window passes (even with the right password). Unknown emails take as
   long to reject as known ones.
@@ -113,7 +118,9 @@ The production override:
   this repository, an empty ML service token or a wildcard CORS origin;
 * publishes only the web app (port `HTTP_PORT`, default 80). The API, database and ML service are reachable only on
   the internal network, and Swagger UI is off (`API_DOCS_ENABLED=true` turns it back on);
-* does not seed demo data unless `SEED_DEMO_DATA=true`.
+* does not seed demo data unless `SEED_DEMO_DATA=true`;
+* marks the refresh cookie `Secure`, so the site must be served over HTTPS (browsers make an exception for
+  `localhost`). `AUTH_COOKIE_SECURE=false` allows a plain-HTTP trial on another host.
 
 Terminate TLS in front of the web container (a load balancer, Caddy, or nginx with certificates). The web container
 sends a strict Content-Security-Policy and the other security headers, gzips assets, caches hashed assets for a year
@@ -143,8 +150,8 @@ cd frontend && npm ci && npm test && npm run dev            # proxies /api to lo
 |---|---|
 | `ml-service/tests` | generator properties, additivity of every explanation, withheld scores, persisted metrics, feedback de-duplication, champion/challenger promotion, scoring during a retrain, API validation and service token |
 | `backend` unit tests | GSTIN (every single-character substitution caught), each compliance rule and its edge cases, the gate service, explanation contract, feature derivation, risk orchestration and fallback, ML client retry, timeout and circuit breaker, decision rules, JWT, sign-in throttling, production secret checks |
-| `backend` integration test | real PostgreSQL: applicant to decision with the audit sequence, ownership (404 for another applicant's application), compliance failure blocking scoring, ML outage leading to manual review, field-level validation errors, append-only audit trigger, refresh-token rotation and reuse detection, sign-in throttling |
-| `frontend` | GSTIN rules identical to the backend's, and the ledger balancing and labelling |
+| `backend` integration test | real PostgreSQL: applicant to decision with the audit sequence, ownership (404 for another applicant's application), compliance failure blocking scoring, ML outage leading to manual review, field-level validation errors, append-only audit trigger, refresh-token rotation and reuse detection through the `HttpOnly` cookie, sign-in throttling |
+| `frontend` | GSTIN rules identical to the backend's, the ledger balancing and labelling, and session restore (one refresh for parallel requests, sign-out on a dead cookie, no token in storage) |
 
 GitHub Actions (`.github/workflows/ci.yml`) runs all three suites on every push, then builds the images, starts the
 whole stack and signs in through the web proxy.
@@ -153,7 +160,7 @@ whole stack and signs in through the web proxy.
 
 | Method | Path | Role |
 |---|---|---|
-| POST | `/api/auth/register`, `/api/auth/login`, `/api/auth/refresh`, `/api/auth/logout` | public |
+| POST | `/api/auth/register`, `/api/auth/login`, `/api/auth/refresh`, `/api/auth/logout` (refresh token in the `cs_refresh` cookie) | public |
 | POST | `/api/applications` (submit; runs the gate, then scoring) | applicant |
 | GET | `/api/applications/mine` | applicant |
 | GET | `/api/applications/{id}` | owner or staff |
@@ -175,7 +182,7 @@ Set `SEED_DEMO_DATA=false` for an empty system.
   model's metrics describe that population, not a real loan book.
 * GST and KYC checks validate structure, check characters and internal consistency. They do not call the live GSTN,
   NSDL or Udyam registries. The blacklist holds demo entries.
-* The web client keeps tokens in `localStorage` for simplicity. A production deployment should move the refresh
-  token to an `HttpOnly` cookie.
+* Tabs coordinate refreshes with the Web Locks API, which browsers offer only on HTTPS or `localhost`. Over plain
+  HTTP on another host, two tabs refreshing at the same instant can end the session and ask the user to sign in again.
 * Sign-in throttling counts in memory, per backend instance. Several instances behind a load balancer would each keep
   their own counts; a shared store (for example Redis) would be needed then.

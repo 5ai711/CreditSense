@@ -1,5 +1,21 @@
 server_tokens off;
 
+# Keep the scheme a TLS-terminating proxy in front of us reports; otherwise use our own.
+map $http_x_forwarded_proto $forwarded_proto {
+    default $http_x_forwarded_proto;
+    ""      $scheme;
+}
+# The port the browser used (from Host), unless a proxy in front already reported one. Without it the
+# backend would assume 80/443 and treat same-origin requests on another port as cross-origin.
+map $http_host $host_port {
+    "~:(?<p>[0-9]+)$" $p;
+    default           "";
+}
+map $http_x_forwarded_port $forwarded_port {
+    default $http_x_forwarded_port;
+    ""      $host_port;
+}
+
 server {
     listen 80;
     server_name _;
@@ -21,10 +37,13 @@ server {
     # The browser only ever talks to this origin; the API is proxied to the backend.
     location /api/ {
         proxy_pass $backend_upstream;
-        proxy_set_header Host $host;
+        # host:port and scheme as the browser used them, so the backend recognises same-origin requests
+        # (a browser's Origin header includes the port; $host would drop it)
+        proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        proxy_set_header X-Forwarded-Port $forwarded_port;
         proxy_read_timeout 300s;
         # nginx adds these for every response; drop Spring Security's copies to avoid duplicates
         proxy_hide_header X-Frame-Options;

@@ -21,6 +21,8 @@ services:
       ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:?set ML_SERVICE_TOKEN in .env}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
       CORS_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN in .env, e.g. https://credit.example.in}
+      # The refresh cookie is sent over HTTPS only; false is for a plain-HTTP trial run, never for real use.
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
 
   frontend:
     ports: !override

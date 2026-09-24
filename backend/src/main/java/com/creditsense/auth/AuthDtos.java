@@ -20,7 +20,8 @@ public final class AuthDtos {
 
     public record LoginRequest(@NotBlank @Email String email, @NotBlank String password) {}
 
-    public record RefreshRequest(@NotBlank String refreshToken) {}
+    /** For API clients without a cookie jar; browsers send the refresh token as an HttpOnly cookie instead. */
+    public record RefreshRequest(String refreshToken) {}
 
     public record UserDto(Long id, String email, String fullName, Role role) {
         public static UserDto of(User u) {
@@ -28,5 +29,13 @@ public final class AuthDtos {
         }
     }
 
-    public record TokenResponse(String accessToken, String refreshToken, String tokenType, long expiresIn, UserDto user) {}
+    /** Internal result of a sign-in or rotation; the refresh token leaves the server only as a cookie. */
+    public record TokenResponse(String accessToken, String refreshToken, String tokenType, long expiresIn, UserDto user) {
+        public SessionResponse session() {
+            return new SessionResponse(accessToken, tokenType, expiresIn, user);
+        }
+    }
+
+    /** What the client sees: a short-lived access token and the signed-in user. */
+    public record SessionResponse(String accessToken, String tokenType, long expiresIn, UserDto user) {}
 }

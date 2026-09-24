@@ -4,6 +4,9 @@
 creditsense:
   seed:
     enabled: ${SEED_DEMO_DATA:false}
+  auth:
+    refresh-cookie:
+      secure: ${AUTH_COOKIE_SECURE:true}
 
 springdoc:
   api-docs:

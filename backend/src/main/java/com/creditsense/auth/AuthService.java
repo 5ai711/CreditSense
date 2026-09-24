@@ -84,15 +84,20 @@ public class AuthService {
 
     /** noRollbackFor: detecting a reused token must still commit the revocation of every session. */
     @Transactional(noRollbackFor = ApiException.class)
-    public TokenResponse refresh(RefreshRequest req) {
-        RefreshTokenService.Rotated r = refreshTokens.rotate(req.refreshToken());
+    public TokenResponse refresh(String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "no session to refresh; sign in again");
+        }
+        RefreshTokenService.Rotated r = refreshTokens.rotate(refreshToken);
         return new TokenResponse(jwt.issueAccessToken(r.user()), r.refreshToken(), "Bearer",
                 jwt.accessTokenTtlSeconds(), UserDto.of(r.user()));
     }
 
     @Transactional
-    public void logout(RefreshRequest req) {
-        refreshTokens.revoke(req.refreshToken());
+    public void logout(String refreshToken) {
+        if (refreshToken != null && !refreshToken.isBlank()) {
+            refreshTokens.revoke(refreshToken);
+        }
     }
 
     @Transactional(readOnly = true)
