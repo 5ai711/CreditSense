@@ -93,3 +93,18 @@ def test_scoring_is_not_blocked_by_a_running_retrain(service, monkeypatch):
         release.set()
         worker.join(60)
     assert not worker.is_alive()
+
+
+def test_every_version_names_the_exact_data_it_was_trained_on(service):
+    from creditsense_ml.service import data_fingerprint
+
+    data = generate(300, 5)
+    same = data_fingerprint(data.copy())
+    assert same == data_fingerprint(data) and len(same) == 64
+    changed = data.copy()
+    changed.loc[0, "monthly_revenue"] += 0.01
+    assert data_fingerprint(changed) != same
+
+    models = service.history()["models"]
+    assert all(m["data_sha256"] and len(m["data_sha256"]) == 64 for m in models)
+    assert service.info()["training_data_sha256"] == service.registry.record(service.version)["data_sha256"]

@@ -62,3 +62,24 @@ describe('session restore through the refresh cookie', () => {
     expect(window.localStorage.getItem('creditsense-session') ?? '').not.toContain('secret')
   })
 })
+
+describe('other tabs', () => {
+  it('follows a sign-out or a different user and drops the stale access token', async () => {
+    const { followOtherTabs } = await import('../store/auth')
+    const target = new EventTarget()
+    followOtherTabs(target as unknown as Window)
+    const storage = (newValue: string | null) =>
+      target.dispatchEvent(Object.assign(new Event('storage'), { key: 'creditsense-session', newValue }))
+
+    useAuth.setState({ user, accessToken: 'mine' })
+    storage(JSON.stringify({ state: { user }, version: 2 })) // same user rewrote the store: nothing changes
+    expect(useAuth.getState().accessToken).toBe('mine')
+
+    const other = { ...user, id: 2, email: 'b@b.in' }
+    storage(JSON.stringify({ state: { user: other }, version: 2 }))
+    expect(useAuth.getState()).toMatchObject({ user: other, accessToken: null })
+
+    storage(JSON.stringify({ state: { user: null }, version: 2 }))
+    expect(useAuth.getState().user).toBeNull()
+  })
+})

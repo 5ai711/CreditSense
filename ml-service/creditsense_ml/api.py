@@ -111,7 +111,7 @@ def health():
     svc: ModelService | None = getattr(app.state, "service", None)
     if svc is None or not svc.ready:
         raise HTTPException(status_code=503, detail="model not loaded")
-    return {"status": "UP", "model_version": svc.info()["model_version"]}
+    return {"status": "UP", "model_version": svc.version}  # constant time: polled every few seconds
 
 
 def _scored(features: FeatureVector):

@@ -83,6 +83,7 @@ class ApplicationFlowIntegrationTest {
     @Autowired UserRepository users;
     @Autowired PasswordEncoder encoder;
     @Autowired JdbcTemplate jdbc;
+    @Autowired com.creditsense.security.RefreshTokenService refreshTokens;
 
     @BeforeEach
     void staff() {
@@ -294,5 +295,19 @@ class ApplicationFlowIntegrationTest {
         assertThat(blocked.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(blocked.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isNotBlank();
         assertThat((String) blocked.getBody().get("message")).contains("too many failed sign-in attempts");
+    }
+
+    @Test
+    void expiredRefreshTokensArePurgedButLiveAndRevokedOnesAreKept() {
+        register("owner9@it.test");
+        Long userId = users.findByEmailIgnoreCase("owner9@it.test").orElseThrow().getId();
+        jdbc.update("insert into refresh_tokens (user_id, token_hash, expires_at, revoked) values "
+                + "(?, 'expired-hash-it', now() - interval '1 day', true), "
+                + "(?, 'revoked-live-hash-it', now() + interval '1 day', true)", userId, userId);
+        refreshTokens.purgeExpired();
+        List<String> left = jdbc.queryForList("select token_hash from refresh_tokens where user_id = ?", String.class,
+                userId);
+        assertThat(left).doesNotContain("expired-hash-it").contains("revoked-live-hash-it");
+        assertThat(left).hasSize(2); // plus the session created at registration
     }
 }

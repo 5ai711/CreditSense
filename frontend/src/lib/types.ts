@@ -155,6 +155,8 @@ export interface ModelInfo {
   holdout_auc: number | null
   training_rows: number
   feedback_rows: number
+  /** SHA-256 of the exact training pool; absent for models trained before fingerprints were recorded */
+  training_data_sha256?: string | null
 }
 
 export interface Comparison {

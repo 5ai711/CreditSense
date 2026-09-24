@@ -3,10 +3,18 @@
 # For a server deployment add the production overrides: see docker-compose.prod.yml.
 name: creditsense
 
+# Rotate container logs so a long-running deployment cannot fill the disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_DB: creditsense
       POSTGRES_USER: creditsense
@@ -22,6 +30,7 @@ services:
   ml-service:
     build: ./ml-service
     restart: unless-stopped
+    logging: *logging
     environment:
       ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-local-dev-ml-token}
       ML_RETRAIN_TRIALS: ${ML_RETRAIN_TRIALS:-0}
@@ -32,6 +41,7 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    logging: *logging
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/creditsense
       DB_USER: creditsense
@@ -58,6 +68,7 @@ services:
   frontend:
     build: ./frontend
     restart: unless-stopped
+    logging: *logging
     depends_on:
       backend:
         condition: service_healthy

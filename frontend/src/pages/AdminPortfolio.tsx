@@ -186,6 +186,14 @@ function ModelCard({ d }: { d: Analytics }) {
     <div className="space-y-4">
       <p className="text-sm">
         <span className="num font-medium">{m.model_version}</span> · trained {date(m.trained_at)} · {integer(m.training_rows)} rows · {integer(m.feedback_rows)} outcomes fed back
+        {m.training_data_sha256 && (
+          <>
+            {' · data '}
+            <abbr className="num no-underline" title={`SHA-256 of the training data: ${m.training_data_sha256}`}>
+              {m.training_data_sha256.slice(0, 12)}
+            </abbr>
+          </>
+        )}
       </p>
       <table className="w-full text-sm">
         <caption className="sr-only">Test metrics for the serving model and the baseline</caption>

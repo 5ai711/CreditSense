@@ -94,13 +94,16 @@ SUBMITTED ─gate─► COMPLIANCE_FAILED            (terminal; the failing rule
 * **Model lifecycle.** Matured loans get simulated 12-month outcomes from the same ground-truth process as the
   training data. `/retrain` trains a challenger on base data plus feedback and promotes it only if its AUC on a
   holdout that no model trains on beats the champion's. Every comparison is logged and charted. Training runs off
-  the scoring path, so predictions keep flowing during a retrain, and a second retrain request gets `409`.
+  the scoring path, so predictions keep flowing during a retrain, and a second retrain request gets `409`. Each
+  version records a SHA-256 fingerprint of the exact data it was trained on, shown on the admin portfolio page.
 
 * **Sessions.** The access token lives only in the page's memory. The refresh token is an `HttpOnly`,
   `SameSite=Strict` cookie scoped to `/api/auth`, so page scripts cannot read it and other sites cannot send it. It
   rotates on every use, and presenting a used token revokes all of that user's sessions. After a reload the web app
   restores the session from the cookie. Tabs take turns refreshing (Web Locks API), so several tabs never look like a
-  replayed token. API clients without cookies can still send `refreshToken` in the request body.
+  replayed token. Signing out, or signing in as someone else, in one tab carries over to the others, and cached data
+  is cleared whenever the signed-in user changes. Expired refresh tokens are purged daily. API clients without
+  cookies can still send `refreshToken` in the request body.
 * **Sign-in protection.** Five failed sign-ins for one account, or twenty from one address, within 15 minutes
   return `429` with `Retry-After` until the window passes (even with the right password). Unknown emails take as
   long to reject as known ones.
@@ -125,7 +128,7 @@ The production override:
 Terminate TLS in front of the web container (a load balancer, Caddy, or nginx with certificates). The web container
 sends a strict Content-Security-Policy and the other security headers, gzips assets, caches hashed assets for a year
 and never caches `index.html`, and re-resolves the backend's address, so restarting the backend alone is safe. All
-services restart automatically and have health checks; the backend shuts down gracefully.
+services restart automatically, have health checks and rotate their logs; the backend shuts down gracefully.
 
 Back up the `pgdata` volume (applications and the audit trail) and the `mldata` volume (model registry, training
 data and outcomes).
@@ -148,10 +151,10 @@ cd frontend && npm ci && npm test && npm run dev            # proxies /api to lo
 
 | Suite | What it covers |
 |---|---|
-| `ml-service/tests` | generator properties, additivity of every explanation, withheld scores, persisted metrics, feedback de-duplication, champion/challenger promotion, scoring during a retrain, API validation and service token |
+| `ml-service/tests` | generator properties, additivity of every explanation, withheld scores, persisted metrics, feedback de-duplication, champion/challenger promotion, scoring during a retrain, training-data fingerprints, API validation and service token |
 | `backend` unit tests | GSTIN (every single-character substitution caught), each compliance rule and its edge cases, the gate service, explanation contract, feature derivation, risk orchestration and fallback, ML client retry, timeout and circuit breaker, decision rules, JWT, sign-in throttling, production secret checks |
-| `backend` integration test | real PostgreSQL: applicant to decision with the audit sequence, ownership (404 for another applicant's application), compliance failure blocking scoring, ML outage leading to manual review, field-level validation errors, append-only audit trigger, refresh-token rotation and reuse detection through the `HttpOnly` cookie, sign-in throttling |
-| `frontend` | GSTIN rules identical to the backend's, the ledger balancing and labelling, and session restore (one refresh for parallel requests, sign-out on a dead cookie, no token in storage) |
+| `backend` integration test | real PostgreSQL: applicant to decision with the audit sequence, ownership (404 for another applicant's application), compliance failure blocking scoring, ML outage leading to manual review, field-level validation errors, append-only audit trigger, refresh-token rotation and reuse detection through the `HttpOnly` cookie, purge of expired tokens, sign-in throttling |
+| `frontend` | GSTIN rules identical to the backend's, the ledger balancing and labelling, session restore (one refresh for parallel requests, sign-out on a dead cookie, no token in storage), following sign-outs in other tabs, and the error screen |
 
 GitHub Actions (`.github/workflows/ci.yml`) runs all three suites on every push, then builds the images, starts the
 whole stack and signs in through the web proxy.

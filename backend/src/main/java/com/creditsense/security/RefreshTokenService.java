@@ -11,7 +11,10 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +27,8 @@ public class RefreshTokenService {
 
     private final RefreshTokenRepository repo;
     private final JwtProperties props;
+    private static final Logger log = LoggerFactory.getLogger(RefreshTokenService.class);
+
     private final SecureRandom random = new SecureRandom();
 
     public RefreshTokenService(RefreshTokenRepository repo, JwtProperties props) {
@@ -44,6 +49,20 @@ public class RefreshTokenService {
         rt.setExpiresAt(Instant.now().plus(props.refreshTokenTtl()));
         repo.save(rt);
         return token;
+    }
+
+    /**
+     * Every sign-in and every page reload adds a row, so expired ones are deleted daily. Revoked rows are kept
+     * until they expire: presenting one is how token theft is detected.
+     */
+    @Scheduled(cron = "${creditsense.auth.refresh-token-purge-cron:0 17 3 * * *}")
+    @Transactional
+    public int purgeExpired() {
+        int deleted = repo.deleteExpiredBefore(Instant.now());
+        if (deleted > 0) {
+            log.info("purged {} expired refresh tokens", deleted);
+        }
+        return deleted;
     }
 
     @Transactional(noRollbackFor = ApiException.class)

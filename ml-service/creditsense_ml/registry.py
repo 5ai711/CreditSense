@@ -41,6 +41,7 @@ class ModelRecord:
     holdout_auc: float | None = None
     parent_version: str | None = None
     notes: dict = field(default_factory=dict)
+    data_sha256: str | None = None  # fingerprint of the exact training pool (see service.data_fingerprint)
 
 
 class Registry:

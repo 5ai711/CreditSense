@@ -23,6 +23,12 @@ log = logging.getLogger(__name__)
 ADDITIVITY_TOLERANCE = 1e-4  # max |base + sum(contributions) - logit(pd)| before a score is withheld
 
 
+def data_fingerprint(data: pd.DataFrame) -> str:
+    """SHA-256 of the training pool in a canonical form, so each model version names the exact data it saw."""
+    canonical = data[FEATURE_NAMES + [LABEL]].to_csv(index=False, float_format="%.10g", lineterminator="\n")
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 class ExplanationUnavailable(RuntimeError):
     """Raised when a prediction cannot be accompanied by a valid explanation."""
 
@@ -83,6 +89,7 @@ class ModelService:
     def _bootstrap(self) -> None:
         log.info("no serving model: training the first champion (%d tuning trials)", self.bootstrap_trials)
         data = pd.read_csv(self.training_path)
+        fingerprint = data_fingerprint(data)
         result = train(data, seed=self.seed, n_trials=self.bootstrap_trials)
         version = self.registry.next_version()
         holdout_auc = self._holdout_auc(result, self._holdout())
@@ -90,6 +97,7 @@ class ModelService:
             version=version, created_at=utcnow(), status="champion", params=result.params,
             metrics=result.metrics, baseline_metrics=result.baseline_metrics, cv_auc=result.cv_auc,
             training_rows=result.training_rows, feedback_rows=0, holdout_auc=holdout_auc, notes=result.notes,
+            data_sha256=fingerprint,
         ))
         self.registry.promote(version)
         self.registry.log_comparison({
@@ -110,6 +118,10 @@ class ModelService:
     @property
     def ready(self) -> bool:
         return self._model is not None
+
+    @property
+    def version(self) -> str | None:
+        return self._version
 
     # ------------------------------------------------------------------ scoring
     def score(self, features: dict) -> Scored:
@@ -208,6 +220,7 @@ class ModelService:
         data = pd.concat([pd.read_csv(self.training_path), fb_train[FEATURE_NAMES + [LABEL]]], ignore_index=True)
         data[NUMERIC_NAMES] = data[NUMERIC_NAMES].astype(float)
         data[LABEL] = data[LABEL].astype(int)
+        fingerprint = data_fingerprint(data)
         challenger = train(data, seed=self.seed + len(self.registry.records()), n_trials=self.retrain_trials,
                            params=champion.params)
         holdout = self._holdout(fb)
@@ -220,7 +233,7 @@ class ModelService:
             version=version, created_at=utcnow(), status="challenger", params=challenger.params,
             metrics=challenger.metrics, baseline_metrics=challenger.baseline_metrics, cv_auc=challenger.cv_auc,
             training_rows=challenger.training_rows, feedback_rows=int(len(fb_train)), holdout_auc=chall_auc,
-            parent_version=champion_version, notes=challenger.notes,
+            parent_version=champion_version, notes=challenger.notes, data_sha256=fingerprint,
         ))
         if promoted:
             self.registry.promote(version)
@@ -253,6 +266,7 @@ class ModelService:
             "baseline_metrics": rec["baseline_metrics"],
             "holdout_auc": rec["holdout_auc"],
             "training_rows": rec["training_rows"],
+            "training_data_sha256": rec.get("data_sha256"),
             "feedback_rows": int(len(fb)),
             "risk_bands": {"LOW": "PD < 5%", "MEDIUM": "5% <= PD < 20%", "HIGH": "PD >= 20%"},
         }
@@ -260,6 +274,7 @@ class ModelService:
     def history(self) -> dict:
         return {"serving_version": self._version, "comparisons": self.registry.history(),
                 "models": [{k: m[k] for k in ("version", "created_at", "status", "holdout_auc", "feedback_rows",
-                                               "parent_version")} | {"auc_roc": m["metrics"]["auc_roc"],
+                                               "parent_version")} | {"data_sha256": m.get("data_sha256"),
+                                                                     "auc_roc": m["metrics"]["auc_roc"],
                                                                      "baseline_auc_roc": m["baseline_metrics"]["auc_roc"]}
                            for m in self.registry.records()]}

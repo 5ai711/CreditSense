@@ -10,7 +10,9 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { App } from './App'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import './index.css'
+import { followOtherTabs, useAuth } from './store/auth'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,12 +26,20 @@ const queryClient = new QueryClient({
   },
 })
 
+// A different person (or nobody) is signed in now: never show the previous user's cached data.
+useAuth.subscribe((state, previous) => {
+  if (state.user?.id !== previous.user?.id) queryClient.clear()
+})
+followOtherTabs()
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </QueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>,
 )

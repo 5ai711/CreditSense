@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import type { TokenResponse, User } from '../lib/types'
 
+const SESSION_KEY = 'creditsense-session'
+
 interface AuthState {
   accessToken: string | null
   user: User | null
@@ -23,7 +25,7 @@ export const useAuth = create<AuthState>()(
       clear: () => set({ accessToken: null, user: null }),
     }),
     {
-      name: 'creditsense-session',
+      name: SESSION_KEY,
       version: 2, // v1 stored tokens; they are dropped on upgrade
       migrate: (persisted) => ({ user: (persisted as { user?: User | null } | undefined)?.user ?? null }),
       partialize: (s) => ({ user: s.user }),
@@ -45,6 +47,24 @@ export const useAuth = create<AuthState>()(
     },
   ),
 )
+
+/**
+ * Keep tabs consistent. When another tab signs out or signs in as someone else, follow it and drop this tab's
+ * in-memory access token, which belongs to the previous user; the next request restores the right session
+ * from the shared cookie.
+ */
+export function followOtherTabs(target: Pick<Window, 'addEventListener'> = window) {
+  target.addEventListener('storage', (e) => {
+    if (e.key !== null && e.key !== SESSION_KEY) return
+    let next: User | null = null
+    try {
+      next = (JSON.parse(e.newValue ?? 'null') as { state?: { user?: User | null } } | null)?.state?.user ?? null
+    } catch {
+      next = null
+    }
+    if (next?.id !== useAuth.getState().user?.id) useAuth.setState({ user: next, accessToken: null })
+  })
+}
 
 export const homeFor = (role: User['role'] | undefined) =>
   role === 'ADMIN' ? '/admin/portfolio' : role === 'LOAN_OFFICER' ? '/officer/queue' : '/applicant/dashboard'
