@@ -201,3 +201,15 @@ Set `SEED_DEMO_DATA=false` for an empty system.
   HTTP on another host, two tabs refreshing at the same instant can end the session and ask the user to sign in again.
 * Sign-in throttling counts in memory, per backend instance. Several instances behind a load balancer would each keep
   their own counts; a shared store (for example Redis) would be needed then.
+
+## Team
+
+Developed at the Department of Computer Science and Engineering, Anurag University, Hyderabad.
+
+* C. Saitarun
+* Siddardha Chiluveru ([@Siddardha-CH](https://github.com/Siddardha-CH))
+* M. Sanjay Reddy
+* Guide: Dr. N. Suresh Rao
+
+The accompanying paper, "CreditSense: A Compliance-Gated and Explainable Machine Learning Framework for MSME
+Credit Risk Assessment", is by the same authors; the experiments behind it are in [research/](research/).
