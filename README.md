@@ -11,9 +11,21 @@ state change is written to an append-only audit trail.
 
 ## Quick start
 
+You need **Git** and **Docker Desktop** (Windows or macOS) or Docker Engine with the Compose plugin (Linux).
+A laptop with 8 GB RAM and about 10 GB of free disk is enough: the running system uses under 1 GB of memory.
+On Windows, let Docker Desktop enable WSL 2 when it asks, then restart.
+
 ```bash
+git clone https://github.com/5ai711/CreditSense.git
+cd CreditSense
 docker compose up --build
 ```
+
+The first run downloads the base images and dependencies and trains the model, so it takes 5 to 15 minutes
+depending on your connection; later starts take under a minute. The system is ready when the log prints
+`demo seed complete: 51 applications` (or when `docker compose ps` shows every service as healthy).
+Stop it with `Ctrl+C` or `docker compose down`; `docker compose down -v` also deletes the data for a fresh start.
+Ports 3000 and 8080 must be free.
 
 | What | Where |
 |---|---|

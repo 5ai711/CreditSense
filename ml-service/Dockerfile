@@ -13,7 +13,7 @@ ARG BOOTSTRAP_TRIALS=25
 RUN python -m creditsense_ml.bootstrap --data-dir /app/seed --trials ${BOOTSTRAP_TRIALS}
 
 COPY docker-entrypoint.sh ./
-RUN useradd --system --uid 10001 mlsvc && mkdir -p /data && chown -R mlsvc /data /app/seed
+RUN chmod 755 docker-entrypoint.sh && useradd --system --uid 10001 mlsvc && mkdir -p /data && chown -R mlsvc /data /app/seed
 USER mlsvc
 
 ENV ML_DATA_DIR=/data PORT=8000
